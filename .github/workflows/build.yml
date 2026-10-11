@@ -26,8 +26,8 @@ jobs:
         include:
           - os: windows-latest
             asset: CraftCrown-Windows.zip
-          - os: macos-latest
-            asset: CraftCrown-macOS.zip
+          - os: macos-latest   # Apple Silicon (arm64) runner
+            asset: CraftCrown-macOS-arm64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,28 @@ jobs:
       - name: Tests on this OS
         run: python -m pytest -q
       - run: pyinstaller --noconfirm craft_crown.spec
+      - name: Check architecture (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          archs=$(lipo -archs dist/CraftCrown.app/Contents/MacOS/CraftCrown)
+          echo "CraftCrown.app architecture: $archs"
+          [[ " $archs " == *" arm64 "* ]]
+      - name: Run the built app (macOS)
+        if: runner.os == 'macOS'
+        run: dist/CraftCrown.app/Contents/MacOS/CraftCrown --selftest selftest-out
+      - name: Run the built app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\CraftCrown\CraftCrown.exe -ArgumentList "--selftest","selftest-out" -Wait -PassThru
+          Get-Content selftest-out\selftest.txt
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ runner.os }}
+          path: selftest-out/
+          if-no-files-found: ignore
       - name: Zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

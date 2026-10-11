@@ -48,8 +48,9 @@ Opties:
 
 **Kant-en-klaar downloaden:** GitHub Actions bouwt bij elke push automatisch de app.
 Ga naar het tabblad **Actions** › de laatste run van *test-and-build* › onderaan bij **Artifacts**:
-`CraftCrown-Windows.zip` (uitpakken en `CraftCrown.exe` starten) en `CraftCrown-macOS.zip`
-(bevat `CraftCrown.app`, alleen in de menubalk, zonder Dock-icoon). Je kunt een build ook met de hand
+`CraftCrown-Windows.zip` (uitpakken en `CraftCrown.exe` starten) en `CraftCrown-macOS-arm64.zip`
+(Apple Silicon, macOS 14 of nieuwer; bevat `CraftCrown.app`, alleen in de menubalk, zonder Dock-icoon). Elke build wordt op de runner ook echt gestart met `--selftest`; het
+resultaat en screenshots staan in het artifact `selftest-…`. Je kunt een build ook met de hand
 starten via *Run workflow*. Push je een tag zoals `v0.1.0`, dan komen beide zips in een
 **GitHub Release**.
 

@@ -285,8 +285,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--settings", action="store_true", help="open meteen het instellingenvenster")
     parser.add_argument("--config", type=Path, help="pad naar config.json")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--selftest", nargs="?", const="", metavar="MAP",
+                        help="controleer of deze build werkt (schrijft resultaat en screenshots naar MAP)")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.selftest is not None:
+        from .selftest import run_selftest
+        out = Path(args.selftest) if args.selftest else None
+        if out:
+            out.mkdir(parents=True, exist_ok=True)
+        return run_selftest(out)
     return CraftCrownApp(args).run()
