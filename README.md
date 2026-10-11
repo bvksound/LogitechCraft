@@ -46,10 +46,18 @@ Opties:
 
 ### Als losse app (zonder Python)
 
-`pip install pyinstaller && pyinstaller craft_crown.spec` maakt `dist/CraftCrown/CraftCrown.exe`
-(Windows) of `dist/CraftCrown.app` (macOS, alleen in de menubalk, zonder Dock-icoon). De GitHub
-Actions-workflow (`.github/workflows/build.yml`) bouwt beide automatisch. Je vindt ze als artifacts bij
-elke run.
+**Kant-en-klaar downloaden:** GitHub Actions bouwt bij elke push automatisch de app.
+Ga naar het tabblad **Actions** › de laatste run van *test-and-build* › onderaan bij **Artifacts**:
+`CraftCrown-Windows.zip` (uitpakken en `CraftCrown.exe` starten) en `CraftCrown-macOS.zip`
+(bevat `CraftCrown.app`, alleen in de menubalk, zonder Dock-icoon). Je kunt een build ook met de hand
+starten via *Run workflow*. Push je een tag zoals `v0.1.0`, dan komen beide zips in een
+**GitHub Release**.
+
+> macOS: de app is niet ondertekend. Open hem de eerste keer met rechtermuisklik › *Open*, of voer
+> `xattr -dr com.apple.quarantine CraftCrown.app` uit. Windows SmartScreen: *Meer informatie* ›
+> *Toch uitvoeren*.
+
+Zelf bouwen: `pip install pyinstaller && pyinstaller craft_crown.spec`.
 
 **Automatisch starten:** Windows: een snelkoppeling naar `CraftCrown.exe` in `shell:startup`.
 macOS: Systeeminstellingen › Algemeen › Inloggen › Open bij inloggen › `CraftCrown.app`.

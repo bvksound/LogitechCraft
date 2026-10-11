@@ -2,6 +2,8 @@ name: test-and-build
 
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -13,28 +15,54 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest hidapi
-      - run: python -m pytest -q tests/test_core.py tests/test_hidpp.py
+      - run: pip install pytest
+      - run: python -m pytest -q
 
   build:
     needs: test
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            asset: CraftCrown-Windows.zip
+          - os: macos-latest
+            asset: CraftCrown-macOS.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pyinstaller
+      - run: pip install -r requirements.txt pyinstaller pytest
+      - name: Tests on this OS
+        run: python -m pytest -q
       - run: pyinstaller --noconfirm craft_crown.spec
-      - name: Zip macOS app
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/CraftCrown -DestinationPath dist/${{ matrix.asset }}
+      - name: Zip (macOS)
         if: runner.os == 'macOS'
-        run: cd dist && ditto -c -k --keepParent CraftCrown.app CraftCrown-macOS.zip
+        run: cd dist && ditto -c -k --keepParent CraftCrown.app ${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
-          name: CraftCrown-${{ runner.os }}
-          path: |
-            dist/CraftCrown/
-            dist/CraftCrown-macOS.zip
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*.zip
+          generate_release_notes: true

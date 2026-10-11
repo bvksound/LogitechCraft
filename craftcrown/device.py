@@ -168,14 +168,14 @@ class CrownService(threading.Thread):
         self.scroll_mode = scroll_mode
         self._transport_factory = transport_factory
         self._enumerate_fn = enumerate_fn
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._commands: "queue.Queue[tuple]" = queue.Queue()
         self._status: tuple[str, bool] = ("", False)
 
     # -- public API (any thread) -------------------------------------------------
 
     def stop(self, timeout: float = 2.0) -> None:
-        self._stop.set()
+        self._stop_event.set()
         if self.is_alive():
             self.join(timeout)
 
@@ -185,19 +185,19 @@ class CrownService(threading.Thread):
     # -- thread ------------------------------------------------------------------
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             session = None
             try:
                 session = self._connect()
                 if session is None:
                     self._set_status("Craft niet gevonden — is Logi Options+ afgesloten?", False)
-                    self._stop.wait(RETRY_SECONDS)
+                    self._stop_event.wait(RETRY_SECONDS)
                     continue
                 self._serve(session)
             except Exception as exc:  # noqa: BLE001 - keep the service alive
                 log.warning("crown session ended: %s", exc)
                 self._set_status(f"Verbinding verbroken: {exc}", False)
-                self._stop.wait(RETRY_SECONDS)
+                self._stop_event.wait(RETRY_SECONDS)
             finally:
                 if session is not None:
                     self._release(session)
@@ -277,7 +277,7 @@ class CrownService(threading.Thread):
         next_watchdog = time.monotonic() + WATCHDOG_SECONDS
         resetup_at: Optional[float] = None
 
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             self._run_commands(session)
 
             for msg in session.backlog:
