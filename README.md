@@ -72,7 +72,10 @@ macOS: Systeeminstellingen › Algemeen › Inloggen › Open bij inloggen › `
 
 Systeeminstellingen › Privacy en beveiliging:
 
-- **Toegankelijkheid**: nodig om sneltoetsen, scrollen en mediatoetsen te versturen. Geef dit aan
+- **Toegankelijkheid**: nodig voor zoom, scrollen en sneltoetsen (volume werkt ook zonder). De app
+  vraagt dit zelf en toont een rode waarschuwing zolang het ontbreekt. **Na elke nieuwe versie**: haal
+  Craft Crown weg uit de lijst (−), voeg hem opnieuw toe (+) en herstart; de app is niet ondertekend,
+  dus macOS ziet elke build als een andere app. Geef dit aan
   Terminal/iTerm (als je vanuit Python start) of aan `CraftCrown.app`.
 - **Invoerbewaking**: alleen nodig als macOS daarom vraagt bij het openen van het toetsenbord.
 

@@ -63,6 +63,13 @@ RECEIVER_PIDS = frozenset({
     0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548,
 })
 
+# HID++ 1.0 receiver registers: notification flags (register 0x00).
+SET_REGISTER = 0x80
+GET_REGISTER = 0x81
+REG_NOTIFICATIONS = 0x00
+NOTIFY_WIRELESS = 0x000100  # device (dis)connection notifications
+NOTIFY_SOFTWARE_PRESENT = 0x000800  # tells the receiver that HID++ software is listening
+
 # HID++ 1.0 receiver notification: device (dis)connected.
 SUB_ID_CONNECTION = 0x41
 SUB_ID_ERROR_10 = 0x8F
@@ -125,6 +132,10 @@ def build_long(devnum: int, feature_index: int, function: int, params: bytes = b
         raise ValueError("too many parameters for a long report")
     msg = bytes([REPORT_LONG, devnum, feature_index, ((function & 0x0F) << 4) | (sw_id & 0x0F)])
     return (msg + bytes(params)).ljust(LONG_LEN, b"\x00")
+
+
+def build_short(devnum: int, sub_id: int, address: int, params: bytes = b"") -> bytes:
+    return (bytes([REPORT_SHORT, devnum, sub_id, address]) + bytes(params)).ljust(SHORT_LEN, b"\x00")[:SHORT_LEN]
 
 
 def signed8(value: int) -> int:
@@ -203,6 +214,26 @@ class HidppDevice:
                 raise HidppError(msg.data[1])
             if (msg.devnum == self.devnum and msg.sub_id == feature_index
                     and msg.function == function and msg.sw_id == SW_ID):
+                return msg.data
+            if self.on_message is not None:
+                self.on_message(msg)
+
+    def register(self, sub_id: int, address: int, params: bytes = b"", timeout: float = 1.0) -> bytes:
+        """HID++ 1.0 register access (used for the receiver itself, devnum 0xFF)."""
+        self.transport.write(build_short(self.devnum, sub_id, address, params))
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HidppTimeout(f"no reply to register {sub_id:#04x}/{address:#04x}")
+            raw = self.transport.read(max(1, int(remaining * 1000)))
+            msg = parse(raw) if raw else None
+            if msg is None:
+                continue
+            if (msg.devnum == self.devnum and msg.sub_id == SUB_ID_ERROR_10
+                    and msg.address == sub_id and msg.data[:1] == bytes([address])):
+                raise HidppError(msg.data[1])
+            if msg.devnum == self.devnum and msg.sub_id == sub_id and msg.address == address:
                 return msg.data
             if self.on_message is not None:
                 self.on_message(msg)

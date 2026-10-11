@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from .keys import parse_combo
 
@@ -149,10 +150,68 @@ class PynputBackend:
     def run(self, command: str) -> None:
         subprocess.Popen(command, shell=True)  # noqa: S602 - user-configured command
 
+    def volume(self, steps: int) -> Optional[str]:
+        """Change the volume directly where possible; returns the new level, or None if unsupported."""
+        if sys.platform == "darwin":
+            return _mac_volume(steps)
+        return None
+
+    def toggle_mute(self) -> Optional[str]:
+        if sys.platform == "darwin":
+            return _mac_toggle_mute()
+        return None
+
+
+MAC_VOLUME_STEP = 6  # percent per crown click (macOS' own volume keys use 6.25 %)
+
+
+def _applescript(source: str) -> str:
+    """Run AppleScript in-process (no Accessibility permission needed for volume)."""
+    try:
+        from Foundation import NSAppleScript  # type: ignore
+
+        result, error = NSAppleScript.alloc().initWithSource_(source).executeAndReturnError_(None)
+        if error is not None:
+            raise RuntimeError(str(error))
+        return str(result.stringValue() or "") if result is not None else ""
+    except ImportError:
+        out = subprocess.run(["osascript", "-e", source], capture_output=True, text=True, timeout=3)
+        if out.returncode != 0:
+            raise RuntimeError(out.stderr.strip())
+        return out.stdout.strip()
+
+
+def _mac_volume(steps: int) -> str:
+    delta = steps * MAC_VOLUME_STEP
+    return _applescript(
+        "set v to (output volume of (get volume settings)) + (%d)\n"
+        "if v < 0 then set v to 0\n"
+        "if v > 100 then set v to 100\n"
+        "set volume output volume v without output muted\n"
+        "return v as text" % delta) + "%"
+
+
+def _mac_toggle_mute() -> str:
+    muted = _applescript("set m to not (output muted of (get volume settings))\n"
+                         "set volume output muted m\nreturn m as text")
+    return "gedempt" if muted == "true" else "geluid aan"
+
 
 class ActionRunner:
-    def __init__(self, backend: Optional[Backend] = None):
+    """Executes actions; ``listener`` gets a short description of each result."""
+
+    def __init__(self, backend: Optional[Backend] = None,
+                 listener: Optional[Callable[[str], None]] = None):
         self._backend = backend
+        self.listener = listener
+        self._count = 0
+
+    def _report(self, text: str, failed: bool = False) -> None:
+        self._count += 1
+        level = logging.WARNING if failed else (logging.INFO if self._count <= 30 else logging.DEBUG)
+        log.log(level, "action: %s", text)
+        if self.listener is not None:
+            self.listener(text)
 
     @property
     def backend(self) -> Backend:
@@ -165,11 +224,18 @@ class ActionRunner:
         if t is None or t.id == "none" or ticks == 0:
             return
         try:
-            self._rotate(t, action, ticks)
+            if not self._rotate(t, action, ticks):
+                self._report(f"{t.label} {ticks:+d}")
         except Exception as exc:  # noqa: BLE001 - a bad action must not kill the app
-            log.warning("action %s failed: %s", t.id, exc)
+            self._report(f"{t.label} mislukt: {exc}", failed=True)
 
-    def _rotate(self, t: ActionType, action: dict, ticks: int) -> None:
+    def _rotate(self, t: ActionType, action: dict, ticks: int) -> bool:
+        """Returns True when it already reported its own result."""
+        if t.id == "volume" and hasattr(self.backend, "volume"):
+            level = self.backend.volume(ticks * max(1, int(param(action, t, "step") or 1)))
+            if level is not None:
+                self._report(f"Volume {level}")
+                return True
         if t.id in ("scroll", "hscroll"):
             amount = ticks * int(param(action, t, "lines") or 1)
             if param(action, t, "invert"):
@@ -178,13 +244,14 @@ class ActionRunner:
                 self.backend.scroll(0, -amount)  # clockwise scrolls down, like the crown itself
             else:
                 self.backend.scroll(amount, 0)
-            return
+            return False
         cw, ccw = (action.get("cw", ""), action.get("ccw", "")) if t.id == "keys" else (t.cw, t.ccw)
         combo = cw if ticks > 0 else ccw
         if not combo:
-            return
+            return False
         step = int(param(action, t, "step") or 1) if any(p.name == "step" for p in t.params) else 1
         self.backend.tap(parse_combo(combo), abs(ticks) * max(1, step))
+        return False
 
     def trigger(self, action: Optional[dict]) -> None:
         t = action_type(TRIGGER, action)
@@ -200,7 +267,12 @@ class ActionRunner:
             elif t.id == "command":
                 if action.get("cmd"):
                     self.backend.run(action["cmd"])
+            elif t.id == "mute" and hasattr(self.backend, "toggle_mute") \
+                    and (state := self.backend.toggle_mute()) is not None:
+                self._report(f"{t.label}: {state}")
+                return
             elif t.cw:
                 self.backend.tap(parse_combo(t.cw))
+            self._report(t.label)
         except Exception as exc:  # noqa: BLE001
-            log.warning("action %s failed: %s", t.id, exc)
+            self._report(f"{t.label} mislukt: {exc}", failed=True)

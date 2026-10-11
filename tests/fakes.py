@@ -22,11 +22,21 @@ class FakeCraftTransport:
         self.mode = [hidpp.CROWN_DIVERT_HID, hidpp.CROWN_SCROLL_RATCHET]
         self.writes: list[bytes] = []
         self.closed = False
+        self.receiver = {"flags": 0x000000}
 
     def write(self, data: bytes) -> None:
         data = bytes(data)
         self.writes.append(data)
         msg = hidpp.parse(data)
+        if msg.devnum == 0xFF and msg.report_id == hidpp.REPORT_SHORT and msg.address == 0x00:
+            f = self.receiver["flags"]
+            if msg.sub_id == hidpp.SET_REGISTER:
+                p = msg.data
+                self.receiver["flags"] = (p[0] << 16) | (p[1] << 8) | p[2]
+                self._reply_short(0xFF, msg.sub_id, 0x00, b"")
+            elif msg.sub_id == hidpp.GET_REGISTER:
+                self._reply_short(0xFF, msg.sub_id, 0x00, bytes([f >> 16, (f >> 8) & 0xFF, f & 0xFF]))
+            return
         if msg.devnum != CRAFT_SLOT:
             # Receiver: unknown device -> HID++ 1.0 error
             self._reply_short(msg.devnum, 0x8F, msg.sub_id, bytes([msg.address, 0x09]))

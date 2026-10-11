@@ -482,6 +482,12 @@ class SettingsWindow(QWidget):
         self.status.setWordWrap(True)
         self.current = QLabel("")
         self.current.setStyleSheet("color: gray")
+        self.activity = QLabel("Crown-test: nog geen signalen van de crown ontvangen — draai of tik eens.")
+        self.activity.setWordWrap(True)
+        self.permission = QLabel("")
+        self.permission.setWordWrap(True)
+        self.permission.setStyleSheet("color: #c0392b; font-weight: bold")
+        self.permission.hide()
 
         self.profiles = QListWidget()
         self.profiles.currentRowChanged.connect(self._profile_selected)
@@ -515,6 +521,8 @@ class SettingsWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.status)
         layout.addWidget(self.current)
+        layout.addWidget(self.permission)
+        layout.addWidget(self.activity)
         layout.addWidget(tabs, 1)
         self.resize(1000, 760)
         self.reload()
@@ -526,6 +534,13 @@ class SettingsWindow(QWidget):
     def set_status(self, text: str, connected: bool) -> None:
         dot = "🟢" if connected else "🔴"
         self.status.setText(f"{dot}  {text}")
+
+    def set_activity(self, text: str) -> None:
+        self.activity.setText(f"Crown-test: {text}")
+
+    def set_permission_warning(self, text: str) -> None:
+        self.permission.setText(text)
+        self.permission.setVisible(bool(text))
 
     def set_current(self, profile_name: str, app: Optional[AppInfo]) -> None:
         where = f"{app.name} ({app.ident})" if app else "—"

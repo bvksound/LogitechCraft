@@ -179,6 +179,17 @@ def _mac_accessibility_ok() -> bool:
         return True  # cannot tell; assume fine
 
 
+def _mac_request_accessibility() -> None:
+    """Show macOS' own 'allow Accessibility' prompt (adds the app to the list)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from ApplicationServices import AXIsProcessTrustedWithOptions  # type: ignore
+        AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class CraftCrownApp:
     def __init__(self, args: argparse.Namespace):
         self.qapp = QApplication.instance() or QApplication(sys.argv)
@@ -194,11 +205,14 @@ class CraftCrownApp:
         self.settings: Optional[SettingsWindow] = None
 
         self.ui = OverlayUi(self.cfg["general"]["ring_size"])
-        self.controller = Controller(self.cfg, ActionRunner(), self.ui, self._schedule,
+        self._crown_events = 0
+        self._last_event = ""
+        self.controller = Controller(self.cfg, ActionRunner(listener=self._action_done), self.ui,
+                                     self._schedule,
                                      on_profile=self._profile_changed)
 
         self.bridge = _Bridge()
-        self.bridge.event.connect(self.controller.handle_event)
+        self.bridge.event.connect(self._crown_event)
         self.bridge.status.connect(self._status_changed)
         self.bridge.feel.connect(self.controller.set_scroll_feel)
 
@@ -219,6 +233,10 @@ class CraftCrownApp:
         self._app_timer = QTimer()
         self._app_timer.timeout.connect(self._poll_app)
         self._app_timer.start(APP_POLL_MS)
+
+        self._perm_timer = QTimer()
+        self._perm_timer.timeout.connect(self._check_permissions)
+        self._perm_timer.start(3000)
 
         self._build_tray()
         self.qapp.aboutToQuit.connect(self._shutdown)
@@ -254,6 +272,44 @@ class CraftCrownApp:
             self.tray.setToolTip(f"Craft Crown — {profile.name}")
         if self.settings is not None:
             self.settings.set_current(profile.name, app)
+
+    def _crown_event(self, ev: CrownEvent) -> None:
+        self._crown_events += 1
+        parts = []
+        if ev.ratchet:
+            parts.append(f"draaien {ev.ratchet:+d} (ratel)")
+        elif ev.rotation:
+            parts.append(f"draaien {ev.rotation:+d} (vloeiend)")
+        if ev.tap:
+            parts.append("tik")
+        if ev.press_started:
+            parts.append("ingedrukt")
+        elif ev.press_ended:
+            parts.append("losgelaten")
+        self._last_event = ", ".join(parts) or "signaal"
+        self._show_activity("")
+        self.controller.handle_event(ev)
+
+    def _action_done(self, text: str) -> None:
+        self._show_activity(text)
+
+    def _show_activity(self, action: str) -> None:
+        if self.settings is None:
+            return
+        text = f"{self._crown_events} signalen ontvangen · laatste: {self._last_event}"
+        if action:
+            text += f" → actie: {action}"
+        self.settings.set_activity(text)
+
+    def _check_permissions(self) -> None:
+        if self.settings is None:
+            return
+        if _mac_accessibility_ok():
+            self.settings.set_permission_warning("")
+        else:
+            self.settings.set_permission_warning(
+                "⚠ Toegankelijkheid staat uit: macOS blokkeert de acties (volume, scrollen, sneltoetsen). "
+                "Zet Craft Crown aan onder Systeeminstellingen › Privacy en beveiliging › Toegankelijkheid.")
 
     def _status_changed(self, text: str, connected: bool) -> None:
         self._status = (text, connected)
@@ -306,6 +362,9 @@ class CraftCrownApp:
             self.settings = SettingsWindow(self.cfg, self._config_edited, lambda: list(self.recent))
             self.settings.set_status(*self._status)
             self.settings.set_current(self.controller.profile.name, self.controller.app)
+            self._check_permissions()
+            if self._crown_events:
+                self._show_activity("")
         self.settings.show()
         _mac_bring_to_front()
         self.settings.raise_()
@@ -332,10 +391,8 @@ class CraftCrownApp:
         if self.service is not None:
             self.service.start()
         if not _mac_accessibility_ok():
-            self.tray.showMessage(
-                "Craft Crown",
-                "Geef toegang via Systeeminstellingen › Privacy en beveiliging › Toegankelijkheid, "
-                "anders kunnen sneltoetsen niet verstuurd worden.")
+            log.warning("Accessibility permission missing: shortcuts, scrolling and zoom are blocked")
+            _mac_request_accessibility()
         # Let Ctrl+C in a terminal stop the app.
         signal.signal(signal.SIGINT, lambda *_: self.qapp.quit())
         keepalive = QTimer()

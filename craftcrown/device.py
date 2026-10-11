@@ -131,6 +131,7 @@ class Candidate:
     product: str
     paths: list[bytes] = field(default_factory=list)
     long_path: Optional[bytes] = None
+    short_path: Optional[bytes] = None
 
     @property
     def is_receiver(self) -> bool:
@@ -155,6 +156,8 @@ def enumerate_candidates(enumerate_fn: Optional[Callable] = None) -> list[Candid
             cand.paths.append(path)
         if info.get("usage") in hidpp.LONG_USAGES:
             cand.long_path = path
+        elif info.get("usage") == 0x0001:
+            cand.short_path = path
     for cand in groups.values():
         log.info("HID++ interface: %s PID %04X, %d collection(s)", cand.product or "?",
                  cand.product_id, len(cand.paths))
@@ -171,12 +174,17 @@ class CompositeTransport:
     arrive on a different HID collection than long ones.
     """
 
-    def __init__(self, writer: hidpp.Transport, readers: list[hidpp.Transport]):
+    def __init__(self, writer: hidpp.Transport, readers: list[hidpp.Transport],
+                 short_writer: Optional[hidpp.Transport] = None):
         self.writer = writer
+        self.short_writer = short_writer or writer
         self.readers = readers
 
     def write(self, data: bytes) -> None:
-        self.writer.write(data)
+        if data[:1] == bytes([hidpp.REPORT_SHORT]):
+            self.short_writer.write(data)
+        else:
+            self.writer.write(data)
 
     def read(self, timeout_ms: int) -> bytes:
         if len(self.readers) == 1:
@@ -200,9 +208,11 @@ class CompositeTransport:
 class _Session:
     """An opened candidate with the Craft found on it."""
 
-    def __init__(self, transports: dict[bytes, hidpp.Transport], writer: hidpp.Transport):
+    def __init__(self, transports: dict[bytes, hidpp.Transport], writer: hidpp.Transport,
+                 short_writer: Optional[hidpp.Transport] = None, is_receiver: bool = False):
         self.transports = transports
-        self.io = CompositeTransport(writer, list(transports.values()))
+        self.is_receiver = is_receiver
+        self.io = CompositeTransport(writer, list(transports.values()), short_writer)
         self.device: Optional[HidppDevice] = None
         self.crown: Optional[Crown] = None
         self.name = ""
@@ -227,6 +237,7 @@ class CrownService(threading.Thread):
         self.on_status = on_status
         self.on_scroll_feel = on_scroll_feel
         self._feel: Optional[str] = None
+        self._events_seen = 0
         self.scroll_mode = scroll_mode
         self._transport_factory = transport_factory
         self._enumerate_fn = enumerate_fn
@@ -298,7 +309,9 @@ class CrownService(threading.Thread):
                     t.close()
                 continue
             opened.append(label)
-            session = _Session(transports, transports[cand.long_path])
+            session = _Session(transports, transports[cand.long_path],
+                               transports.get(cand.short_path) if cand.short_path else None,
+                               is_receiver=cand.is_receiver)
             slots = hidpp.RECEIVER_SLOTS if cand.is_receiver else (hidpp.DIRECT_DEVICE,)
             for devnum in slots:
                 if self._probe(session, devnum):
@@ -335,8 +348,31 @@ class CrownService(threading.Thread):
         session.crown = Crown(device, index)
         return True
 
+    def _enable_receiver_notifications(self, session: _Session) -> None:
+        """Tell a receiver that HID++ software is present (as Logi Options and Solaar do).
+
+        Without the "software present" flag a receiver may not forward the
+        diverted crown notifications; the wireless flag gives us reconnects.
+        """
+        if not session.is_receiver:
+            return
+        rx = HidppDevice(session.io, hidpp.DIRECT_DEVICE, on_message=session.backlog.append)
+        try:
+            cur = rx.register(hidpp.GET_REGISTER, hidpp.REG_NOTIFICATIONS)
+            flags = (cur[0] << 16) | (cur[1] << 8) | cur[2]
+            wanted = flags | hidpp.NOTIFY_WIRELESS | hidpp.NOTIFY_SOFTWARE_PRESENT
+            if wanted != flags:
+                rx.register(hidpp.SET_REGISTER, hidpp.REG_NOTIFICATIONS,
+                            bytes([(wanted >> 16) & 0xFF, (wanted >> 8) & 0xFF, wanted & 0xFF]))
+            log.info("receiver notification flags: %06X -> %06X", flags, wanted)
+        except (HidppError, HidppTimeout) as exc:
+            log.warning("cannot set receiver notification flags: %s", exc)
+
     def _divert(self, session: _Session) -> None:
+        self._enable_receiver_notifications(session)
         session.crown.divert(SCROLL_MODES.get(self.scroll_mode, CROWN_SCROLL_KEEP))
+        log.info("crown diverted on %s (feature index %#04x, devnum %#04x), mode %s", session.name,
+                 session.crown.index, session.device.devnum, session.crown.get_mode())
         self._set_status(f"Verbonden met {session.name}", True)
         self._report_feel(session.crown.get_mode()[1])
 
@@ -387,8 +423,12 @@ class CrownService(threading.Thread):
     def _dispatch(self, session: _Session, msg: Message, resetup_at: Optional[float]):
         event = session.crown.event_from(msg)
         if event is not None:
+            self._events_seen += 1
+            level = logging.INFO if self._events_seen <= 30 else logging.DEBUG
+            log.log(level, "crown event #%d: %s", self._events_seen, event)
             self.on_event(event)
             return resetup_at
+        log.debug("other HID++ message: %s", msg)
         link = hidpp.is_connection_notification(msg, session.device.devnum)
         if link is True:
             # The keyboard woke up / reconnected: diversion is lost, redo it.

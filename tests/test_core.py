@@ -189,3 +189,26 @@ def test_smooth_rotation_accumulates(rig):
     for _ in range(5):
         ctl.handle_event(CrownEvent(rotation=5))  # 25 units, 12 per tick -> 2 ticks
     assert sum(c[2] for c in backend.calls) == 2
+
+
+def test_volume_uses_direct_backend_when_available():
+    class VolumeBackend(FakeBackend):
+        def volume(self, steps):
+            self.calls.append(("volume", steps))
+            return "42%"
+
+    seen = []
+    backend = VolumeBackend()
+    runner = ActionRunner(backend, listener=seen.append)
+    runner.rotate({"type": "volume"}, -2)
+    assert backend.calls == [("volume", -2)] and seen == ["Volume 42%"]
+
+
+def test_volume_falls_back_to_media_keys():
+    class NoVolume(FakeBackend):
+        def volume(self, steps):
+            return None
+
+    backend = NoVolume()
+    ActionRunner(backend).rotate({"type": "volume"}, 1)
+    assert backend.calls == [("tap", ("media_volume_up",), 1)]

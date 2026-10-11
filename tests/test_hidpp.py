@@ -78,7 +78,8 @@ def test_service_diverts_and_streams_events():
 def _split_collections():
     long_t = FakeCraftTransport(b"long")
     short_t = FakeCraftTransport(b"short")
-    long_t._reply_short = lambda devnum, sub_id, address, payload: short_t.inbox.put(
+    short_t.receiver = long_t.receiver  # one receiver behind both collections
+    short_t._reply_short = long_t._reply_short = lambda devnum, sub_id, address, payload: short_t.inbox.put(
         bytes([0x10, devnum, sub_id, address]) + payload.ljust(3, b"\0")[:3])
     return long_t, short_t
 
@@ -108,7 +109,9 @@ def test_service_with_split_windows_collections():
     svc.start()
     try:
         assert wait_for(lambda: True in statuses)
-        assert all(w[0] == 0x11 for w in long_t.writes) and not short_t.writes
+        # Long reports go to the long collection, short (register) reports to the short one.
+        assert all(w[0] == 0x11 for w in long_t.writes)
+        assert short_t.writes and all(w[0] == 0x10 for w in short_t.writes)
     finally:
         svc.stop()
 
@@ -124,5 +127,19 @@ def test_service_rediverts_after_keyboard_reconnects():
         transport.mode[0] = hidpp.CROWN_DIVERT_HID  # keyboard slept and forgot the diversion
         transport.inbox.put(bytes([0x10, CRAFT_SLOT, 0x41, 0x04, 0x00, 0x00, 0x00]))  # link up
         assert wait_for(lambda: transport.mode[0] == hidpp.CROWN_DIVERT_HIDPP, timeout=2)
+    finally:
+        svc.stop()
+
+
+def test_service_tells_receiver_software_is_present():
+    transport = FakeCraftTransport()
+    statuses = []
+    svc = CrownService(lambda ev: None, lambda text, ok: statuses.append(ok),
+                       transport_factory=lambda path: transport, enumerate_fn=fake_enumerate)
+    svc.start()
+    try:
+        assert wait_for(lambda: True in statuses)
+        flags = transport.receiver["flags"]
+        assert flags & hidpp.NOTIFY_SOFTWARE_PRESENT and flags & hidpp.NOTIFY_WIRELESS
     finally:
         svc.stop()

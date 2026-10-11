@@ -75,6 +75,12 @@ def run_selftest(out_dir: Optional[Path]) -> int:
 
         check("hidapi shared mode", shared_mode)
 
+        def applescript_volume():
+            from .actions import _applescript
+            return "volume " + _applescript("return (output volume of (get volume settings)) as text")
+
+        check("AppleScript (volume zonder Toegankelijkheid)", applescript_volume)
+
     from .activeapp import get_foreground_app, list_running_apps
     check("foreground app", lambda: get_foreground_app())
     check("running apps", lambda: f"{len(list_running_apps())} apps")
