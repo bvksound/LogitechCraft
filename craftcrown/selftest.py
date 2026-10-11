@@ -68,6 +68,13 @@ def run_selftest(out_dir: Optional[Path]) -> int:
 
         check("Invoermonitoring", input_monitoring)
 
+        def shared_mode():
+            from .device import mac_open_shared
+            assert mac_open_shared() is True, "hidapi still opens devices exclusively"
+            return "hidapi opens devices shared (not exclusive)"
+
+        check("hidapi shared mode", shared_mode)
+
     from .activeapp import get_foreground_app, list_running_apps
     check("foreground app", lambda: get_foreground_app())
     check("running apps", lambda: f"{len(list_running_apps())} apps")

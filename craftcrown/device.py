@@ -50,12 +50,48 @@ def request_input_monitoring(request: bool = True) -> Optional[int]:
         return None
 
 
+_shared_mode = False
+
+
+def mac_open_shared() -> Optional[bool]:
+    """macOS: make hidapi open devices *shared* instead of exclusively.
+
+    hidapi's ``hid_init`` switches macOS to exclusive mode ("seize"), which
+    macOS refuses for a keyboard/receiver it is using itself, and which would
+    otherwise steal all key presses.  The python binding does not expose the
+    switch, but the C function is compiled into the extension module.
+    Returns True when shared mode is active, None when not applicable.
+    """
+    global _shared_mode
+    if sys.platform != "darwin":
+        return None
+    if _shared_mode:
+        return True
+    try:
+        import ctypes
+
+        import hid  # type: ignore
+
+        hid.enumerate(0xFFFF, 0xFFFF)  # runs hid_init, which forces exclusive mode
+        lib = ctypes.CDLL(hid.__file__)
+        lib.hid_darwin_set_open_exclusive.argtypes = [ctypes.c_int]
+        lib.hid_darwin_set_open_exclusive.restype = None
+        lib.hid_darwin_get_open_exclusive.restype = ctypes.c_int
+        lib.hid_darwin_set_open_exclusive(0)
+        _shared_mode = lib.hid_darwin_get_open_exclusive() == 0
+        return _shared_mode
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cannot switch hidapi to shared mode: %s", exc)
+        return False
+
+
 class HidTransport:
     """Adapter over the two popular Python bindings that are both imported as ``hid``."""
 
     def __init__(self, path: bytes):
         import hid  # type: ignore
 
+        mac_open_shared()
         self.path = path
         if hasattr(hid, "device"):  # 'hidapi' package (cython-hidapi)
             self._dev = hid.device()
@@ -246,6 +282,7 @@ class CrownService(threading.Thread):
                              "in de computer, of is de Craft via Bluetooth verbonden?", False)
             return None
         open_errors: list[str] = []
+        last_error = ""
         opened: list[str] = []
         for cand in candidates:
             label = f"{cand.product or 'Logitech'} (PID {cand.product_id:04X})"
@@ -256,6 +293,7 @@ class CrownService(threading.Thread):
             except OSError as exc:
                 log.warning("cannot open %s: %s", label, exc)
                 open_errors.append(label)
+                last_error = str(exc)
                 for t in transports.values():
                     t.close()
                 continue
@@ -270,14 +308,15 @@ class CrownService(threading.Thread):
                     return session
             session.close()
         if open_errors and not opened:
-            if sys.platform == "darwin":
+            detail = f" (fout: {last_error})" if last_error else ""
+            if sys.platform == "darwin" and request_input_monitoring(request=False) != 0:
                 request_input_monitoring()
-                self._set_status("macOS blokkeert de toegang tot het toetsenbord. Zet Craft Crown aan onder "
+                self._set_status("macOS geeft geen toegang tot het toetsenbord. Zet Craft Crown aan onder "
                                  "Systeeminstellingen › Privacy en beveiliging › Invoermonitoring en start "
-                                 "de app opnieuw.", False)
+                                 f"de app opnieuw{detail}.", False)
             else:
-                self._set_status(f"Kan {', '.join(open_errors)} niet openen. Is Logi Options+ afgesloten?",
-                                 False)
+                self._set_status(f"Kan {', '.join(open_errors)} niet openen{detail}. "
+                                 "Is Logi Options+ volledig afgesloten?", False)
         else:
             self._set_status(f"Logitech-apparaat gevonden ({', '.join(opened + open_errors)}), maar geen Craft "
                              "met crown die antwoordt. Druk een toets in om de Craft te wekken, en sluit "
