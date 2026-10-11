@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -24,6 +25,29 @@ SCROLL_MODES = {"auto": CROWN_SCROLL_KEEP, "ratchet": CROWN_SCROLL_RATCHET,
 
 RETRY_SECONDS = 3.0
 WATCHDOG_SECONDS = 10.0
+
+
+def request_input_monitoring(request: bool = True) -> Optional[int]:
+    """macOS: check (and if needed request) the Input Monitoring permission.
+
+    Returns 0 = granted, 1 = denied, 2 = not decided yet, None = not macOS.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes
+
+        iokit = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/IOKit.framework/IOKit")
+        iokit.IOHIDCheckAccess.restype = ctypes.c_uint32
+        iokit.IOHIDCheckAccess.argtypes = [ctypes.c_uint32]
+        iokit.IOHIDRequestAccess.restype = ctypes.c_bool
+        iokit.IOHIDRequestAccess.argtypes = [ctypes.c_uint32]
+        status = int(iokit.IOHIDCheckAccess(1))  # kIOHIDRequestTypeListenEvent
+        if status != 0 and request:
+            iokit.IOHIDRequestAccess(1)
+        return status
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class HidTransport:
@@ -96,6 +120,8 @@ def enumerate_candidates(enumerate_fn: Optional[Callable] = None) -> list[Candid
         if info.get("usage") in hidpp.LONG_USAGES:
             cand.long_path = path
     for cand in groups.values():
+        log.info("HID++ interface: %s PID %04X, %d collection(s)", cand.product or "?",
+                 cand.product_id, len(cand.paths))
         if cand.long_path is None:
             cand.long_path = cand.paths[0]
     # Receivers first: that's how most Crafts are connected.
@@ -190,7 +216,6 @@ class CrownService(threading.Thread):
             try:
                 session = self._connect()
                 if session is None:
-                    self._set_status("Craft niet gevonden — is Logi Options+ afgesloten?", False)
                     self._stop_event.wait(RETRY_SECONDS)
                     continue
                 self._serve(session)
@@ -210,21 +235,31 @@ class CrownService(threading.Thread):
             self.on_status(text, connected)
 
     def _connect(self) -> Optional[_Session]:
+        """Find the Craft; on failure set a status that says *why* it was not found."""
         try:
             candidates = enumerate_candidates(self._enumerate_fn)
         except ImportError:
             self._set_status("Python-module 'hidapi' ontbreekt (pip install hidapi)", False)
             return None
+        if not candidates:
+            self._set_status("Geen Logitech-ontvanger of -toetsenbord gevonden. Zit de Unifying-ontvanger "
+                             "in de computer, of is de Craft via Bluetooth verbonden?", False)
+            return None
+        open_errors: list[str] = []
+        opened: list[str] = []
         for cand in candidates:
+            label = f"{cand.product or 'Logitech'} (PID {cand.product_id:04X})"
             transports: dict[bytes, hidpp.Transport] = {}
             try:
                 for path in cand.paths:
                     transports[path] = self._transport_factory(path)
             except OSError as exc:
-                log.debug("cannot open %s: %s", cand.product, exc)
+                log.warning("cannot open %s: %s", label, exc)
+                open_errors.append(label)
                 for t in transports.values():
                     t.close()
                 continue
+            opened.append(label)
             session = _Session(transports, transports[cand.long_path])
             slots = hidpp.RECEIVER_SLOTS if cand.is_receiver else (hidpp.DIRECT_DEVICE,)
             for devnum in slots:
@@ -234,6 +269,19 @@ class CrownService(threading.Thread):
                     session.name = f"{session.name} ({via})"
                     return session
             session.close()
+        if open_errors and not opened:
+            if sys.platform == "darwin":
+                request_input_monitoring()
+                self._set_status("macOS blokkeert de toegang tot het toetsenbord. Zet Craft Crown aan onder "
+                                 "Systeeminstellingen › Privacy en beveiliging › Invoermonitoring en start "
+                                 "de app opnieuw.", False)
+            else:
+                self._set_status(f"Kan {', '.join(open_errors)} niet openen. Is Logi Options+ afgesloten?",
+                                 False)
+        else:
+            self._set_status(f"Logitech-apparaat gevonden ({', '.join(opened + open_errors)}), maar geen Craft "
+                             "met crown die antwoordt. Druk een toets in om de Craft te wekken, en sluit "
+                             "Logi Options+ af.", False)
         return None
 
     def _probe(self, session: _Session, devnum: int) -> bool:

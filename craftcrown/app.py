@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QGridLayout, QMenu, QPushButton, QSystemTrayIcon, QWidget
 
 from . import __version__, config
@@ -28,6 +29,43 @@ log = logging.getLogger("craftcrown")
 APP_POLL_MS = 300
 SAVE_DELAY_MS = 400
 RECENT_APPS = 15
+INSTANCE_KEY = "CraftCrown-single-instance"
+
+
+def log_path() -> Path:
+    return config.config_dir() / "craftcrown.log"
+
+
+def setup_logging(verbose: bool) -> None:
+    """Log to stderr and to a file next to config.json (a Finder-started app has no terminal)."""
+    import logging.handlers
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        log_path().parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.handlers.RotatingFileHandler(
+            log_path(), maxBytes=1_000_000, backupCount=2, encoding="utf-8"))
+    except OSError:
+        pass
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    def excepthook(exc_type, exc, tb):
+        log.critical("unhandled exception", exc_info=(exc_type, exc, tb))
+
+    sys.excepthook = excepthook
+
+
+def notify_running_instance() -> bool:
+    """If Craft Crown is already running, ask it to show its window and return True."""
+    sock = QLocalSocket()
+    sock.connectToServer(INSTANCE_KEY)
+    if not sock.waitForConnected(300):
+        return False
+    sock.write(b"show")
+    sock.waitForBytesWritten(300)
+    sock.disconnectFromServer()
+    return True
 
 
 class _Bridge(QObject):
@@ -120,6 +158,17 @@ def _mac_setup() -> None:
         pass
 
 
+def _mac_bring_to_front() -> None:
+    """A menu-bar app is never 'active' on its own; activate it so the window shows in front."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApplication  # type: ignore
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _mac_accessibility_ok() -> bool:
     if sys.platform != "darwin":
         return True
@@ -173,8 +222,19 @@ class CraftCrownApp:
 
         self._build_tray()
         self.qapp.aboutToQuit.connect(self._shutdown)
-        if args.settings or not QSystemTrayIcon.isSystemTrayAvailable():
+        self._instance_server = QLocalServer()
+        QLocalServer.removeServer(INSTANCE_KEY)  # stale socket after a crash
+        if self._instance_server.listen(INSTANCE_KEY):
+            self._instance_server.newConnection.connect(self._other_instance_started)
+        log.info("Craft Crown %s started; config %s; log %s", __version__, self.config_path, log_path())
+        if (args.settings or not args.background or not QSystemTrayIcon.isSystemTrayAvailable()):
             self.open_settings()
+
+    def _other_instance_started(self) -> None:
+        conn = self._instance_server.nextPendingConnection()
+        if conn is not None:
+            conn.disconnectFromServer()
+        self.open_settings()
 
     # ------------------------------------------------------------------ plumbing
 
@@ -227,6 +287,7 @@ class CraftCrownApp:
         menu.addSeparator()
         menu.addAction("Instellingen…", self.open_settings)
         menu.addAction("Configuratie herladen", self.reload_config)
+        menu.addAction("Logbestand tonen", self.show_log)
         menu.addSeparator()
         menu.addAction("Afsluiten", self.qapp.quit)
         self.tray.setContextMenu(menu)
@@ -246,8 +307,12 @@ class CraftCrownApp:
             self.settings.set_status(*self._status)
             self.settings.set_current(self.controller.profile.name, self.controller.app)
         self.settings.show()
+        _mac_bring_to_front()
         self.settings.raise_()
         self.settings.activateWindow()
+
+    def show_log(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path())))
 
     def reload_config(self) -> None:
         fresh = config.load(self.config_path)
@@ -283,18 +348,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="craft-crown", description="Bestuur de crown van de Logitech Craft.")
     parser.add_argument("--simulate", action="store_true", help="geen Craft nodig: knoppen simuleren de crown")
     parser.add_argument("--settings", action="store_true", help="open meteen het instellingenvenster")
+    parser.add_argument("--background", action="store_true",
+                        help="start zonder venster, alleen in de menubalk/systeemvak (voor automatisch starten)")
     parser.add_argument("--config", type=Path, help="pad naar config.json")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--selftest", nargs="?", const="", metavar="MAP",
                         help="controleer of deze build werkt (schrijft resultaat en screenshots naar MAP)")
     parser.add_argument("--version", action="version", version=__version__)
+    # macOS adds "-psn_..." when an app is started from Finder on older systems.
+    argv = [a for a in (sys.argv[1:] if argv is None else argv) if not a.startswith("-psn_")]
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging(args.verbose)
     if args.selftest is not None:
         from .selftest import run_selftest
         out = Path(args.selftest) if args.selftest else None
         if out:
             out.mkdir(parents=True, exist_ok=True)
         return run_selftest(out)
+    QApplication.instance() or QApplication(sys.argv)
+    if notify_running_instance():
+        log.info("already running: asked the running instance to show its window")
+        return 0
     return CraftCrownApp(args).run()

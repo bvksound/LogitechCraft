@@ -61,6 +61,13 @@ def run_selftest(out_dir: Optional[Path]) -> int:
         check("ApplicationServices (Toegankelijkheid)",
               lambda: f"trusted={__import__('ApplicationServices').AXIsProcessTrusted()}")
 
+        def input_monitoring():
+            from .device import request_input_monitoring
+            status = request_input_monitoring(request=False)
+            return {0: "toegestaan", 1: "geweigerd", 2: "nog niet gevraagd"}.get(status, status)
+
+        check("Invoermonitoring", input_monitoring)
+
     from .activeapp import get_foreground_app, list_running_apps
     check("foreground app", lambda: get_foreground_app())
     check("running apps", lambda: f"{len(list_running_apps())} apps")
@@ -123,6 +130,36 @@ def run_selftest(out_dir: Optional[Path]) -> int:
         return "rendered"
 
     check("settings window", settings_window)
+
+    def full_app():
+        """Start the real app (tray, window, crown service) for a moment."""
+        import argparse
+        import tempfile
+
+        from .app import CraftCrownApp
+
+        cfg_path = Path(tempfile.mkdtemp()) / "config.json"
+        crown_app = CraftCrownApp(argparse.Namespace(simulate=False, settings=False, background=False,
+                                                     config=cfg_path))
+        if crown_app.service is not None:
+            crown_app.service.start()
+        seen = {}
+
+        def inspect():
+            seen["window"] = crown_app.settings is not None and crown_app.settings.isVisible()
+            seen["tray"] = crown_app.tray.isVisible()
+            if seen["window"] and out_dir:
+                crown_app.settings.grab().save(str(out_dir / "selftest-startup.png"))
+            app.quit()
+
+        QTimer.singleShot(2500, inspect)
+        app.exec()
+        assert seen.get("window"), "window not shown"
+        status = crown_app._status[0]
+        crown_app._shutdown()
+        return f"window shown, tray={seen['tray']}, status: {status}"
+
+    check("app startup", full_app)
 
     log("RESULT: " + ("PASS" if failures == 0 else f"FAIL ({failures})"))
     if out_dir:

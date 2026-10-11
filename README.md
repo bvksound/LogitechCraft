@@ -42,7 +42,12 @@ Opties:
 | `--settings` | open meteen het instellingenvenster |
 | `--simulate` | geen Craft nodig: een venstertje met knoppen simuleert de crown (om de ring uit te proberen) |
 | `--config PAD` | ander configuratiebestand gebruiken |
+| `--background` | start zonder venster, alleen het icoon (voor automatisch starten) |
+| `--selftest MAP` | controleer of de app werkt; resultaat en screenshots komen in MAP |
 | `-v` | uitgebreide logging (handig bij problemen) |
+
+Bij het starten opent het instellingenvenster, met bovenaan of de Craft gevonden is (en zo niet,
+waarom). Open je de app nog eens terwijl ze al draait, dan komt dat venster naar voren.
 
 ### Als losse app (zonder Python)
 
@@ -159,7 +164,8 @@ Je kunt het ook met de hand aanpassen en daarna *Configuratie herladen* kiezen i
 - **Draaien doet te veel of te weinig**: kies onder *Algemeen › Gevoel van de crown* tussen ratel en
   vloeiend, of pas *Herhalingen per klik* of *Regels per klik* aan.
 - **Sneltoetsen doen niets op macOS**: geef de Toegankelijkheid-machtiging (zie hierboven).
-- Start met `-v` voor uitgebreide logging.
+- Er wordt een logbestand bijgehouden naast `config.json` (`craftcrown.log`); open het via het
+  menubalk-icoon › *Logbestand tonen*. Start met `-v` voor meer detail.
 
 ## Ontwikkeling
 
