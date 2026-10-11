@@ -75,14 +75,26 @@ def test_service_diverts_and_streams_events():
     assert transport.mode[0] == hidpp.CROWN_DIVERT_HID
 
 
-def test_service_with_split_windows_collections_finds_craft_quickly():
-    """Short replies on a separate collection must not cost a timeout per empty slot."""
-    import time
-
+def _split_collections():
     long_t = FakeCraftTransport(b"long")
     short_t = FakeCraftTransport(b"short")
     long_t._reply_short = lambda devnum, sub_id, address, payload: short_t.inbox.put(
         bytes([0x10, devnum, sub_id, address]) + payload.ljust(3, b"\0")[:3])
+    return long_t, short_t
+
+
+def test_short_error_on_other_collection_is_an_error_not_a_timeout():
+    """Windows: receiver errors arrive on the short collection; probing must not wait for a timeout."""
+    from craftcrown.device import CompositeTransport
+
+    long_t, short_t = _split_collections()
+    io = CompositeTransport(long_t, [short_t, long_t])
+    with pytest.raises(hidpp.HidppError):
+        hidpp.HidppDevice(io, 1).feature_index(hidpp.FEATURE_CROWN, timeout=5)
+
+
+def test_service_with_split_windows_collections():
+    long_t, short_t = _split_collections()
     infos = [
         {"path": b"short", "vendor_id": hidpp.LOGITECH_VID, "product_id": 0xC52B,
          "usage_page": 0xFF00, "usage": 1, "interface_number": 2, "serial_number": ""},
@@ -93,11 +105,9 @@ def test_service_with_split_windows_collections_finds_craft_quickly():
     svc = CrownService(lambda ev: None, lambda text, ok: statuses.append(ok),
                        transport_factory={b"long": long_t, b"short": short_t}.get,
                        enumerate_fn=lambda v, p: infos)
-    start = time.monotonic()
     svc.start()
     try:
         assert wait_for(lambda: True in statuses)
-        assert time.monotonic() - start < 0.4
         assert all(w[0] == 0x11 for w in long_t.writes) and not short_t.writes
     finally:
         svc.stop()
