@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "craft-crown"
+version = "0.1.0"
+description = "Bestuur de crown van het Logitech Craft-toetsenbord zonder Logi Options: ring-menu en acties per app."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6-Essentials>=6.5",
+    "hidapi>=0.14",
+    "pynput>=1.7.6",
+    "pyobjc-framework-Cocoa>=9; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=9; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pyinstaller>=6"]
+
+[project.scripts]
+craft-crown = "craftcrown.app:main"
+
+[tool.setuptools]
+packages = ["craftcrown", "craftcrown.ui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

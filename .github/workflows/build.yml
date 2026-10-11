@@ -1,0 +1,40 @@
+name: test-and-build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest hidapi
+      - run: python -m pytest -q tests/test_core.py tests/test_hidpp.py
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: pyinstaller --noconfirm craft_crown.spec
+      - name: Zip macOS app
+        if: runner.os == 'macOS'
+        run: cd dist && ditto -c -k --keepParent CraftCrown.app CraftCrown-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CraftCrown-${{ runner.os }}
+          path: |
+            dist/CraftCrown/
+            dist/CraftCrown-macOS.zip

@@ -1,0 +1,5 @@
+PySide6-Essentials>=6.5
+hidapi>=0.14
+pynput>=1.7.6
+pyobjc-framework-Cocoa>=9; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=9; sys_platform == "darwin"
